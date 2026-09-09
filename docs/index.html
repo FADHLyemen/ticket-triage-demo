@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support Ticket Triage — webhook · classify · validate · route</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#111834; --panel2:#0e1530; --line:#1e2a4f;
+    --txt:#e8ecf7; --dim:#93a0c4; --dim2:#6b789e;
+    --accent:#5b8cff; --ok:#2fbf71; --warn:#f2b544; --bad:#ff5f6d; --purple:#a880ff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  header{padding:18px 22px;border-bottom:1px solid var(--line);
+         background:linear-gradient(180deg,#121a3a,#0b1020);
+         display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:12.5px;margin-top:2px}
+  .spacer{flex:1}
+  .chip{font:600 11px/1 var(--mono);padding:6px 9px;border-radius:999px;
+        border:1px solid var(--line);background:#0d142e;color:var(--dim)}
+  .chip b{color:var(--txt);font-weight:700}
+  .chip.live{border-color:#1d5e3c;background:#0d2418;color:#7ee2ab}
+  .chip.sim{border-color:#5a4410;background:#241c08;color:#f5cf7a}
+  main{display:grid;grid-template-columns:340px minmax(0,1fr) 380px;gap:14px;padding:14px}
+  @media(max-width:1200px){main{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .panel > h2{margin:0;padding:11px 14px;font-size:12px;font-weight:700;letter-spacing:.7px;
+              text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line);
+              background:var(--panel2);display:flex;align-items:center;gap:8px}
+  .panel > h2 .hint{font-weight:500;text-transform:none;letter-spacing:0;color:var(--dim2);font-size:11.5px}
+  .body{padding:13px 14px}
+  label{display:block;font-size:11.5px;color:var(--dim);margin:10px 0 4px;font-weight:600}
+  input,textarea,select{width:100%;background:#0a0f24;color:var(--txt);border:1px solid var(--line);
+        border-radius:8px;padding:8px 10px;font:13px/1.45 inherit}
+  textarea{resize:vertical;min-height:96px;font-family:inherit}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+  button{cursor:pointer;border-radius:8px;border:1px solid var(--line);background:#16204a;
+         color:var(--txt);padding:8px 12px;font:600 12.5px inherit;transition:.12s}
+  button:hover{background:#1b2a5e}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04122f}
+  button.primary:hover{filter:brightness(1.08)}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row > *{flex:1}
+  .samples{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px}
+  .samples button{padding:4px 8px;font:600 11px var(--mono);background:#0d142e}
+  .samples button.on{background:var(--accent);color:#04122f;border-color:var(--accent)}
+  /* pipeline */
+  .stage{display:grid;grid-template-columns:26px 1fr;gap:10px;padding:9px 0;border-bottom:1px dashed #1a2547}
+  .stage:last-child{border-bottom:none}
+  .dot{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line);
+       display:grid;place-items:center;font:700 11px var(--mono);color:var(--dim2);background:#0a0f24}
+  .stage.run .dot{border-color:var(--accent);color:var(--accent);animation:pulse 1s infinite}
+  .stage.ok .dot{border-color:var(--ok);background:#0d2418;color:#7ee2ab}
+  .stage.warn .dot{border-color:var(--warn);background:#241c08;color:#f5cf7a}
+  .stage.bad .dot{border-color:var(--bad);background:#2a0f14;color:#ff98a1}
+  .stage.skip{opacity:.42}
+  @keyframes pulse{50%{opacity:.35}}
+  .stage .t{font-weight:650;font-size:13px}
+  .stage .d{color:var(--dim);font-size:12px;margin-top:1px}
+  .stage .d code{font-family:var(--mono);font-size:11.5px;color:#b9c6ea}
+  /* result */
+  .kv{display:grid;grid-template-columns:104px 1fr;gap:6px 10px;font-size:13px;margin-bottom:12px}
+  .kv div:nth-child(odd){color:var(--dim);font-size:12px;padding-top:1px}
+  .tag{display:inline-block;font:700 11px var(--mono);padding:3px 8px;border-radius:6px;
+       background:#16204a;border:1px solid var(--line)}
+  .tag.cat{background:#141f45;color:#a9c1ff;border-color:#26356b}
+  .tag.u-low{background:#12231a;color:#7ee2ab;border-color:#1d5e3c}
+  .tag.u-medium{background:#1a2140;color:#a9c1ff;border-color:#26356b}
+  .tag.u-high{background:#2a2208;color:#f5cf7a;border-color:#5a4410}
+  .tag.u-critical{background:#2a0f14;color:#ff98a1;border-color:#6d1d26}
+  .meter{height:7px;background:#0a0f24;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:5px}
+  .meter i{display:block;height:100%;background:var(--ok)}
+  .meter i.mid{background:var(--warn)} .meter i.low{background:var(--bad)}
+  .verdict{border-radius:10px;padding:11px 12px;margin-bottom:12px;border:1px solid}
+  .verdict.auto{background:#0d2418;border-color:#1d5e3c}
+  .verdict.review{background:#241c08;border-color:#5a4410}
+  .verdict.fail{background:#2a0f14;border-color:#6d1d26}
+  .verdict .h{font-weight:750;font-size:13.5px;display:flex;gap:8px;align-items:center}
+  .verdict .r{color:var(--dim);font-size:12.2px;margin-top:4px}
+  .flag{border-left:2px solid var(--warn);background:#12172f;padding:7px 10px;margin:6px 0;border-radius:0 7px 7px 0}
+  .flag.structural{border-left-color:var(--bad)}
+  .flag b{font-family:var(--mono);font-size:11.5px;color:#f5cf7a}
+  .flag.structural b{color:#ff98a1}
+  .flag .p{color:var(--dim);font-size:12px}
+  .flag .a{font-size:12px}
+  pre{margin:0;background:#080d1f;border:1px solid var(--line);border-radius:9px;padding:11px;
+      overflow:auto;font:11.7px/1.55 var(--mono);color:#c7d3f2;max-height:290px}
+  /* tabs */
+  .tabbar{display:flex;gap:4px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
+  .tabbar button{border:none;background:transparent;border-bottom:2px solid transparent;border-radius:0;
+                 padding:11px 12px;color:var(--dim);font-weight:650}
+  .tabbar button.on{color:var(--txt);border-bottom-color:var(--accent);background:transparent}
+  .tabbar .n{font:700 10.5px var(--mono);background:#16204a;border-radius:99px;padding:1px 6px;margin-left:6px}
+  table{width:100%;border-collapse:collapse;font-size:12.6px}
+  th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+     padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel2)}
+  td{padding:8px 10px;border-bottom:1px solid #16204a;vertical-align:top}
+  tr:hover td{background:#131c3d}
+  .tw{max-height:340px;overflow:auto}
+  .muted{color:var(--dim2);padding:26px 14px;text-align:center;font-size:12.5px}
+  .mono{font-family:var(--mono);font-size:11.5px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;padding:14px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+  .stat .n{font:700 21px var(--mono);letter-spacing:-.5px}
+  .stat .l{color:var(--dim);font-size:11.5px;margin-top:2px}
+  .bars{padding:0 14px 14px}
+  .bar{display:grid;grid-template-columns:150px 1fr 34px;gap:9px;align-items:center;margin:5px 0;font-size:12px}
+  .bar .t{height:9px;background:#0a0f24;border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+  .bar .t i{display:block;height:100%;background:linear-gradient(90deg,#5b8cff,#a880ff)}
+  footer{padding:16px 22px 34px;color:var(--dim2);font-size:12px;border-top:1px solid var(--line);margin-top:14px}
+  .note{background:#0e1530;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+        color:var(--dim);font-size:12px;margin-bottom:10px}
+  .sr{position:absolute;left:-9999px}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Support Ticket Triage</h1>
+    <div class="sub">webhook → duplicate check → LLM classification → schema validation → confidence routing</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="chip" id="modeChip">checking…</span>
+  <span class="chip">auto-route ≥ <b>0.85</b></span>
+  <span class="chip">review floor <b>0.60</b></span>
+  <span class="chip">dedupe TTL <b>24h</b></span>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ composer -->
+  <section class="panel">
+    <h2>Inbound ticket <span class="hint">POST /webhook/ticket</span></h2>
+    <div class="body">
+      <label>Load a sample <span style="color:var(--dim2);font-weight:400">— each one proves a different branch</span></label>
+      <div class="samples" id="samples"></div>
+      <div class="note" id="proves">Pick a sample, or write your own ticket below.</div>
+
+      <label for="subject">Subject</label>
+      <input id="subject" placeholder="Charged twice for the October invoice">
+      <label for="body">Body</label>
+      <textarea id="body" placeholder="Describe the issue as a customer would…"></textarea>
+      <div class="row">
+        <div>
+          <label for="email">Requester</label>
+          <input id="email" placeholder="customer@example.com">
+        </div>
+        <div style="max-width:118px">
+          <label for="channel">Channel</label>
+          <select id="channel">
+            <option>email</option><option>web</option><option>chat</option>
+            <option>phone</option><option>api</option>
+          </select>
+        </div>
+      </div>
+
+      <label for="fault">Simulate a bad model response</label>
+      <select id="fault"></select>
+
+      <div class="row" style="margin-top:13px">
+        <button class="primary" id="send" style="flex:2">Send to webhook</button>
+        <button id="runAll">Run all 12</button>
+      </div>
+      <div class="row" style="margin-top:7px">
+        <button class="ghost" id="dupe">Resend as duplicate</button>
+        <button class="ghost" id="reset">Reset</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ pipeline -->
+  <section class="panel">
+    <h2>Pipeline <span class="hint" id="pipeHint">idle</span></h2>
+    <div class="body">
+      <div id="stages"></div>
+      <label style="margin-top:14px">Response body</label>
+      <pre id="json">// send a ticket to see the structured result</pre>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ result -->
+  <section class="panel">
+    <h2>Decision</h2>
+    <div class="body" id="decision">
+      <div class="muted">No ticket processed yet.</div>
+    </div>
+  </section>
+</main>
+
+<!-- ------------------------------------------------ queues -->
+<section class="panel" style="margin:0 14px">
+  <div class="tabbar" id="tabbar">
+    <button data-tab="auto" class="on">Auto-routed<span class="n" id="nAuto">0</span></button>
+    <button data-tab="review">Manual review<span class="n" id="nReview">0</span></button>
+    <button data-tab="dupes">Duplicates blocked<span class="n" id="nDupes">0</span></button>
+    <button data-tab="errors">Error log<span class="n" id="nErrors">0</span></button>
+    <button data-tab="stats">Stats</button>
+  </div>
+  <div id="tabs"></div>
+</section>
+
+<footer>
+  <strong>How to read this.</strong> The sample corpus is deliberately stacked with edge cases —
+  vague one-liners, a multi-issue ticket, a non-English ticket, an angry email about $3.20 —
+  so the automation rate you see here is far below what a real inbox produces. The point of the
+  demo is not the rate, it is that every ticket the model was unsure about, or answered badly,
+  ends up in the review queue with a reason attached instead of being silently misrouted.
+  <br><br>
+  <span id="footMode"></span>
+</footer>
+
+<script>
+"use strict";
+/* ==========================================================================
+   Policy constants — mirrored from app/validation.py and app/classifier.py.
+   When this page is served by the FastAPI app it calls the real API instead
+   and none of the simulation below runs.
+   ========================================================================== */
+const AUTO_ROUTE_THRESHOLD = 0.85, LOW_CONFIDENCE_FLOOR = 0.60;
+
+const CATEGORY_TEAM = {
+  billing:"billing_ops", refund_cancellation:"billing_ops", account_access:"accounts_identity",
+  technical_bug:"tier2_engineering", shipping_delivery:"logistics",
+  feature_request:"product_feedback", abuse_security:"trust_safety",
+  general_inquiry:"tier1_support"
+};
+const SLA = {critical:15, high:60, medium:480, low:1440};
+const TEAMS = Object.values(CATEGORY_TEAM).filter((v,i,a)=>a.indexOf(v)===i);
+
+const KEYWORDS = {
+  billing:["invoice","charged","charge","billing","payment","card","subscription","price",
+           "overcharg","double bill","receipt","vat","tax"],
+  refund_cancellation:["refund","cancel","money back","chargeback","terminate my","unsubscribe"],
+  account_access:["log in","login","sign in","password","locked out","2fa","mfa","reset link",
+                  "can't access my account","sso","verification code"],
+  technical_bug:["error","crash","500","bug","broken","not working","exception","timeout","fails",
+                 "stack trace","blank screen","won't load","outage"],
+  shipping_delivery:["shipment","delivery","tracking","package","parcel","courier","arrived",
+                     "shipped","dispatch","customs"],
+  feature_request:["feature request","would be great","suggestion","please add","add support for",
+                   "roadmap","wishlist","it would help if"],
+  abuse_security:["phishing","fraud","hacked","breach","unauthorized","suspicious login","scam",
+                  "malware","data leak","impersonat"]
+};
+const CRITICAL_MARKERS=["outage","production down","all users","data loss","breach",
+                        "everyone is affected","site is down","cannot process any"];
+const HIGH_MARKERS=["urgent","asap","immediately","blocked","deadline","escalate","third time",
+                    "still waiting","unacceptable"];
+const LOW_MARKERS=["no rush","whenever you get a chance","just curious","question about",
+                   "low priority","nice to have"];
+
+const FAULTS=[
+  {id:"none",label:"Normal response"},
+  {id:"missing_field",label:"Missing required fields (urgency, team)"},
+  {id:"unknown_enum",label:"Invented category + team not in the enum"},
+  {id:"bad_confidence",label:"Confidence out of range (1.7)"},
+  {id:"wrong_team",label:"High confidence, but wrong team for the category"},
+  {id:"empty_summary",label:"Blank summary"},
+  {id:"not_json",label:"Prose instead of JSON"},
+  {id:"api_error",label:"Upstream API failure after all retries"}
+];
+
+const SAMPLES=[
+ {id:"s1",proves:"clean auto-route",subject:"Charged twice for the October invoice",
+  body:"Hi, invoice INV-40921 was charged to my card on Oct 2 and then again on Oct 3 for the same amount ($149.00). The subscription is monthly so this is a duplicate payment. Please refund the second charge.",
+  requester_email:"dana.k@northline.co",channel:"email"},
+ {id:"s2",proves:"clean auto-route, different team",subject:"Locked out after enabling 2FA",
+  body:"I enabled 2FA yesterday and the authenticator app is now showing codes that are rejected at sign in. I cannot log in on any device. The reset link goes to an old email I no longer control.",
+  requester_email:"m.orozco@fieldtrust.io",channel:"web"},
+ {id:"s3",proves:"policy override — critical urgency is never hands-off",
+  subject:"API returning 500 on every request since 09:40 UTC",
+  body:"Production is down. Every call to /v2/orders returns a 500 with an empty body. Started at 09:40 UTC, all users affected, our checkout is offline. Stack trace attached.",
+  requester_email:"sre@brightpath.dev",channel:"api"},
+ {id:"s4",proves:"policy override — abuse_security bypasses automation",
+  subject:"Phishing email pretending to be your billing team",
+  body:"We received an email from billing-support@your-company-invoices.net asking staff to re-enter card details. Looks like a phishing attempt impersonating you. Two people may have clicked it.",
+  requester_email:"it@calderworks.com",channel:"email"},
+ {id:"s5",proves:"low confidence — vague ticket goes to review",subject:"it doesn't work",
+  body:"hi it stopped working can you fix",requester_email:"jr@example.com",channel:"chat"},
+ {id:"s6",proves:"low confidence — multi-issue ticket resists a single label",subject:"A few things",
+  body:"First, I was billed the annual rate instead of monthly. Also the export button throws an error when I pick CSV? And also is there any way to get a second seat added, or do I need a new plan? Sorry for the pile-up.",
+  requester_email:"priya@lanternhq.com",channel:"email"},
+ {id:"s7",proves:"urgency tracks business impact, not customer tone",subject:"ABSOLUTELY UNACCEPTABLE!!!",
+  body:"This is the third time I am writing. My invoice shows $3.20 more than the quoted price. I want this fixed immediately, it is completely unacceptable and I am considering cancelling.",
+  requester_email:"g.holt@mailbox.net",channel:"email"},
+ {id:"s8",proves:"clean auto-route to logistics",subject:"Tracking number hasn't moved in 6 days",
+  body:"Package TRK-88213 was marked shipped on the 4th and the courier tracking has not updated since. Delivery estimate has passed.",
+  requester_email:"l.svensson@nordvik.se",channel:"web"},
+ {id:"s9",proves:"borderline — 0.81 lands just under the 0.85 bar",
+  subject:"Feature request: bulk CSV export of the audit log",
+  body:"It would be great if you could add support for exporting the full audit log as CSV rather than page by page. Our compliance team pulls it quarterly and copies it by hand today.",
+  requester_email:"compliance@vestrahealth.org",channel:"web"},
+ {id:"s10",proves:"non-English ticket — honest low confidence beats a confident guess",
+  subject:"مشكلة في الدفع",
+  body:"لم أتمكن من إتمام عملية الدفع، تظهر رسالة خطأ عند الضغط على زر الدفع.",
+  requester_email:"a.saleh@example.ye",channel:"email"},
+ {id:"s11",proves:"duplicate protection — same ticket, reflowed whitespace and casing",
+  subject:"Charged   twice for the OCTOBER invoice",
+  body:"Hi,  invoice INV-40921 was charged to my card on Oct 2   and then again on Oct 3 for the same amount ($149.00).\nThe subscription is monthly so this is a duplicate payment.\n\nPlease refund the second charge.",
+  requester_email:"Dana.K@Northline.co",channel:"email"},
+ {id:"s12",proves:"general inquiry fallback",subject:"Thanks for the help yesterday",
+  body:"Just wanted to say the agent who helped me on Tuesday was excellent. No action needed, no rush.",
+  requester_email:"tomas@bluecrest.io",channel:"email"}
+];
+
+/* ==========================================================================
+   Simulation backend — the same pipeline, running in the page.
+   ========================================================================== */
+function fnv1a(str){
+  const bytes=new TextEncoder().encode(str);
+  let h=2166136261>>>0;
+  for(const b of bytes){h=(h^b)>>>0; h=Math.imul(h,16777619)>>>0;}
+  return h>>>0;
+}
+function fingerprint(t){
+  if(t.external_id) return "eid:"+fnv1a(t.external_id.trim().toLowerCase()).toString(16);
+  const body=t.body.replace(/^\s*(>|on .+ wrote:)/gim," ");
+  let norm=(t.subject+" "+body).replace(/\s+/g," ").trim().toLowerCase();
+  norm=norm.replace(/[^a-z0-9\u0600-\u06ff ]+/g,"");
+  return "sha:"+fnv1a((t.requester_email||"").trim().toLowerCase()+"|"+norm).toString(16);
+}
+function mockClassify(t,fault){
+  const text=(t.subject+"\n"+t.body).toLowerCase();
+  const scores={};
+  for(const [cat,kws] of Object.entries(KEYWORDS)) scores[cat]=kws.filter(k=>text.includes(k)).length;
+  let ranked=Object.entries(scores).sort((a,b)=>b[1]-a[1]);
+  let top=ranked[0][0], topScore=ranked[0][1], runner=ranked[1]?ranked[1][1]:0;
+  if(scores.abuse_security>0){                       // security signals win ties
+    top="abuse_security"; topScore=scores.abuse_security;
+    runner=Math.max(...Object.entries(scores).filter(([k])=>k!=="abuse_security").map(([,v])=>v));
+  }
+  let category,base;
+  if(topScore===0){category="general_inquiry";base=0.42;}
+  else{
+    category=top; base=0.58+Math.min(topScore,4)*0.09;
+    if(runner>=topScore) base-=0.22; else if(runner>0) base-=0.07;
+  }
+  let urgency;
+  if(CRITICAL_MARKERS.some(m=>text.includes(m))||category==="abuse_security") urgency="critical";
+  else if(HIGH_MARKERS.some(m=>text.includes(m))) urgency="high";
+  else if(LOW_MARKERS.some(m=>text.includes(m))) urgency="low";
+  else urgency="medium";
+  if(t.body.length<60) base-=0.12;
+  if((text.match(/\?/g)||[]).length>=3||text.includes(" and also ")) base-=0.10;
+  const jitter=(fnv1a(text)%1000)/1000*0.08-0.04;
+  let confidence=Math.round(Math.max(0.05,Math.min(0.97,base+jitter))*100)/100;
+  const first=t.body.trim().split(/(?<=[.!?])\s/)[0];
+  const summary=(first.length>25?first:t.body.trim()).slice(0,240);
+  let data={category,urgency,summary,recommended_team:CATEGORY_TEAM[category],confidence};
+
+  if(fault==="missing_field"){delete data.recommended_team; delete data.urgency;}
+  else if(fault==="bad_confidence") data.confidence=1.7;
+  else if(fault==="unknown_enum"){data.category="cancellation_and_billing_dispute";
+                                  data.recommended_team="the billing guys";}
+  else if(fault==="wrong_team"){data.recommended_team="product_feedback"; data.confidence=0.93;}
+  else if(fault==="empty_summary") data.summary="   ";
+  else if(fault==="low_confidence") data.confidence=0.41;
+  else if(fault==="not_json") return {data:null,raw:"Sure! Here's the classification: ```json {category: billing,"};
+  else if(fault==="api_error") throw {classifier:true,kind:"transient_http",
+                                      message:"simulated upstream 503 after 3 attempts",attempts:3};
+  return {data,raw:JSON.stringify(data)};
+}
+function snapEnum(v,allowed){
+  if(typeof v!=="string") return null;
+  const raw=v.trim().toLowerCase().replace(/[ -]/g,"_");
+  return allowed.includes(raw)?raw:null;
+}
+function validateAndRepair(data,t){
+  const flags=[]; data=Object.assign({},data||{});
+  const empty=Object.keys(data).length===0;
+  if(empty) flags.push({field:"*",problem:"empty or unparseable response",
+    action:"fell back to general_inquiry @ confidence 0",severity:"structural"});
+
+  let category=snapEnum(data.category,Object.keys(CATEGORY_TEAM));
+  if(!category){flags.push({field:"category",problem:`missing or unrecognised value ${JSON.stringify(data.category)}`,
+    action:"defaulted to general_inquiry",severity:"structural"}); category="general_inquiry";}
+
+  let urgency=snapEnum(data.urgency,["low","medium","high","critical"]);
+  if(!urgency){flags.push({field:"urgency",problem:`missing or unrecognised value ${JSON.stringify(data.urgency)}`,
+    action:"defaulted to medium",severity:"structural"}); urgency="medium";}
+
+  const expected=CATEGORY_TEAM[category];
+  let team=snapEnum(data.recommended_team,TEAMS);
+  if(!team){flags.push({field:"recommended_team",problem:`missing or unrecognised value ${JSON.stringify(data.recommended_team)}`,
+    action:`derived ${expected} from category`,severity:"structural"}); team=expected;}
+  else if(team!==expected){flags.push({field:"recommended_team",
+    problem:`${team} is not the owner of category ${category}`,
+    action:`overridden to ${expected} by the routing table`,severity:"repaired"}); team=expected;}
+
+  let summary=String(data.summary||"").replace(/\s+/g," ").trim();
+  if(!summary){summary=(t.subject||t.body).slice(0,240).trim();
+    flags.push({field:"summary",problem:"empty",action:"fell back to the ticket subject",severity:"repaired"});}
+  else if(summary.length>300){summary=summary.slice(0,297)+"…";
+    flags.push({field:"summary",problem:"exceeded 300 characters",action:"truncated",severity:"repaired"});}
+
+  let confidence=Number(data.confidence);
+  if(!isFinite(confidence)){flags.push({field:"confidence",
+    problem:`missing or non-numeric ${JSON.stringify(data.confidence)}`,
+    action:"set to 0.0 so the ticket goes to review",severity:"structural"}); confidence=0;}
+  else if(confidence>=10&&confidence<=100){flags.push({field:"confidence",
+    problem:`${confidence} out of range 0-1`,action:"rescaled from percent and capped at 0.5",
+    severity:"repaired"}); confidence=Math.min(confidence/100,0.5);}
+  else if(confidence<0||confidence>1){flags.push({field:"confidence",
+    problem:`${confidence} out of range 0-1`,action:"clamped",severity:"repaired"});
+    confidence=Math.max(0,Math.min(1,confidence));}
+  if(empty) confidence=0;
+
+  return [{category,urgency,summary,recommended_team:team,
+           confidence:Math.round(confidence*1000)/1000},flags];
+}
+function needsRepair(flags){
+  const s=flags.filter(f=>f.severity==="structural");
+  return s.length?s.map(f=>`${f.field}: ${f.problem}`).join("; "):null;
+}
+function decideRoute(cls,flags){
+  const overrides=[], sla=SLA[cls.urgency];
+  const decisionFields=["*","category","recommended_team","confidence","urgency"];
+  const structural=flags.filter(f=>f.severity==="structural"||decisionFields.includes(f.field));
+  if(cls.category==="abuse_security") overrides.push("abuse_security always gets human eyes");
+  if(cls.urgency==="critical") overrides.push("critical urgency requires an on-call acknowledgement");
+  if(structural.length) return {action:"manual_review",destination:"manual_review_queue",
+    reason:`validator had to correct ${structural.length} decision field(s): `+
+           [...new Set(structural.map(f=>f.field))].join(", "),sla_minutes:sla,policy_overrides:overrides};
+  if(overrides.length) return {action:"manual_review",destination:"manual_review_queue",
+    reason:`policy override → ${cls.recommended_team} on approval`,sla_minutes:sla,policy_overrides:overrides};
+  if(cls.confidence>=AUTO_ROUTE_THRESHOLD) return {action:"auto_route",destination:cls.recommended_team,
+    reason:`confidence ${cls.confidence.toFixed(2)} ≥ ${AUTO_ROUTE_THRESHOLD} and all fields validated clean`,
+    sla_minutes:sla,policy_overrides:[]};
+  if(cls.confidence>=LOW_CONFIDENCE_FLOOR) return {action:"manual_review",destination:"manual_review_queue",
+    reason:`confidence ${cls.confidence.toFixed(2)} is below the ${AUTO_ROUTE_THRESHOLD} auto-route bar; suggested team ${cls.recommended_team}`,
+    sla_minutes:sla,policy_overrides:overrides};
+  return {action:"manual_review",destination:"manual_review_queue",
+    reason:`confidence ${cls.confidence.toFixed(2)} below the ${LOW_CONFIDENCE_FLOOR} floor; treated as unclassified`,
+    sla_minutes:sla,policy_overrides:overrides.concat(["triage from scratch"])};
+}
+
+const SimBackend={
+  name:"simulation", tickets:[], dedupe:new Map(), errors:[], seq:0,
+  reset(){this.tickets=[];this.dedupe=new Map();this.errors=[];this.seq=0;},
+  log(stage,message,kind,attempts,ticket_id){
+    this.errors.unshift({ts:new Date().toISOString(),stage,message,kind,attempts,ticket_id});
+  },
+  async submit(t,fault){
+    const fp=fingerprint(t), id="tkt_"+(++this.seq).toString().padStart(6,"0");
+    if(this.dedupe.has(fp)){
+      const orig=this.dedupe.get(fp);
+      const rec={ticket_id:"dup_"+this.seq,fingerprint:fp,status:"duplicate",
+        duplicate_of:orig,received_at:new Date().toISOString(),subject:t.subject,
+        reason:`identical fingerprint to ${orig}`};
+      this.tickets.unshift(rec); return rec;
+    }
+    this.dedupe.set(fp,id);
+    let raw, attempts=1;
+    try{ raw=mockClassify(t,fault); }
+    catch(e){
+      this.log("classify",e.message,e.kind,e.attempts,id);
+      this.dedupe.delete(fp);                       // let the sender retry
+      const rec={ticket_id:id,fingerprint:fp,status:"failed",error:e.message,attempts:e.attempts,
+        received_at:new Date().toISOString(),subject:t.subject,provider:"mock"};
+      this.tickets.unshift(rec); return rec;
+    }
+    if(raw.data===null) this.log("parse","model response was not JSON","unparseable",1,id);
+    let [cls,flags]=validateAndRepair(raw.data,t);
+    const hint=needsRepair(flags);
+    if(hint){
+      this.log("validate","structural problems: "+hint,"schema_violation",attempts,id);
+      const retry=mockClassify(t,null); attempts++;
+      const [rc,rf]=validateAndRepair(retry.data,t);
+      if(rf.length<flags.length){
+        cls=rc; flags=flags.concat(rf,[{field:"*",problem:`first attempt failed validation (${hint})`,
+          action:"repair pass succeeded; ticket still sent to review",severity:"structural"}]);
+      }
+    }
+    const routing=decideRoute(cls,flags);
+    const rec={ticket_id:id,fingerprint:fp,status:"processed",received_at:new Date().toISOString(),
+      classification:cls,validation_flags:flags,routing,provider:"mock",model:"mock-keyword-v1",
+      attempts,latency_ms:3+Math.floor(Math.random()*6),subject:t.subject,
+      requester_email:t.requester_email,review_state:routing.action==="manual_review"?"pending":null};
+    this.tickets.unshift(rec); return rec;
+  },
+  async state(){return {tickets:this.tickets,errors:this.errors};},
+  async resolve(id,decision,team){
+    const t=this.tickets.find(x=>x.ticket_id===id);
+    if(t){t.review_state=decision; if(team){t.routing.destination=team; t.classification.recommended_team=team;}}
+  }
+};
+
+/* ==========================================================================
+   Live backend — used when this page is served by the FastAPI app.
+   ========================================================================== */
+const LiveBackend={
+  name:"live", base:"",
+  async submit(t,fault){
+    const r=await fetch(this.base+"/webhook/ticket",{method:"POST",
+      headers:{"Content-Type":"application/json","X-Demo-Fault":fault||"none"},
+      body:JSON.stringify(t)});
+    return await r.json();
+  },
+  async state(){
+    const [tk,er]=await Promise.all([
+      fetch(this.base+"/api/tickets?limit=300").then(r=>r.json()),
+      fetch(this.base+"/api/errors").then(r=>r.json())]);
+    return {tickets:tk.tickets.map(row=>({
+      ticket_id:row.id,status:row.status,subject:row.subject,requester_email:row.requester_email,
+      received_at:row.received_at,duplicate_of:row.status==="duplicate"?row.reason:null,
+      review_state:row.review_state,attempts:row.attempts,latency_ms:row.latency_ms,
+      error:row.error,provider:row.provider,model:row.model,fingerprint:row.fingerprint,
+      validation_flags:row.validation_flags,reason:row.reason,
+      classification:row.category?{category:row.category,urgency:row.urgency,summary:row.summary,
+        recommended_team:row.team,confidence:row.confidence}:null,
+      routing:row.action?{action:row.action,destination:row.destination,reason:row.reason,
+        sla_minutes:row.sla_minutes,policy_overrides:row.policy_overrides}:null
+    })),errors:er.errors};
+  },
+  async resolve(id,decision,team){
+    await fetch(this.base+`/api/review/${id}`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({decision,team})});
+  },
+  async reset(){ await fetch(this.base+"/api/reset",{method:"POST"}); }
+};
+
+let BE=SimBackend;
+
+/* ==========================================================================
+   UI
+   ========================================================================== */
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+const STAGES=[
+  {k:"ingest",  n:"1", t:"Ingest",              d:"validate the webhook payload against the request schema"},
+  {k:"dedupe",  n:"2", t:"Duplicate check",     d:"content fingerprint claimed atomically, 24h window"},
+  {k:"classify",n:"3", t:"LLM classification",  d:"strict JSON schema, temperature 0, retry on transient errors"},
+  {k:"validate",n:"4", t:"Validate & repair",   d:"every field re-checked; one repair pass on structural failures"},
+  {k:"route",   n:"5", t:"Routing policy",      d:"confidence + validation state + hard policy overrides"},
+  {k:"persist", n:"6", t:"Persist & log",       d:"ticket, decision, flags and any errors written down"}
+];
+
+function renderStages(state){
+  $("#stages").innerHTML=STAGES.map(s=>{
+    const st=state[s.k]||{cls:"skip",txt:s.d};
+    return `<div class="stage ${st.cls}"><div class="dot">${st.cls==="ok"?"✓":st.cls==="bad"?"!":st.cls==="warn"?"▲":s.n}</div>
+      <div><div class="t">${s.t}</div><div class="d">${st.txt}</div></div></div>`;
+  }).join("");
+}
+renderStages({});
+
+function confClass(c){return c>=AUTO_ROUTE_THRESHOLD?"":c>=LOW_CONFIDENCE_FLOOR?"mid":"low";}
+
+function renderDecision(r){
+  if(!r){$("#decision").innerHTML='<div class="muted">No ticket processed yet.</div>';return;}
+  if(r.status==="duplicate"){
+    $("#decision").innerHTML=`<div class="verdict review"><div class="h">🚫 Duplicate — not processed</div>
+      <div class="r">Fingerprint matches <span class="mono">${esc(r.duplicate_of||r.reason)}</span>.
+      No API call was made, no ticket created, and the sender gets a 200 so it stops retrying.</div></div>
+      <div class="kv"><div>fingerprint</div><div class="mono">${esc(r.fingerprint)}</div></div>`;
+    return;
+  }
+  if(r.status==="failed"){
+    $("#decision").innerHTML=`<div class="verdict fail"><div class="h">⛔ Classification failed</div>
+      <div class="r">${esc(r.error)}</div></div>
+      <div class="kv"><div>attempts</div><div>${r.attempts}</div>
+      <div>fingerprint</div><div class="mono">${esc(r.fingerprint)}</div></div>
+      <div class="note">The fingerprint was released, so the helpdesk can safely redeliver this
+      exact ticket. The failure is in the error log with its stage and retry count.</div>`;
+    return;
+  }
+  const c=r.classification, rt=r.routing;
+  const auto=rt.action==="auto_route";
+  const flags=(r.validation_flags||[]).map(f=>
+    `<div class="flag ${f.severity==="structural"?"structural":""}"><b>${esc(f.field)}</b>
+      <div class="p">${esc(f.problem)}</div><div class="a">→ ${esc(f.action)}</div></div>`).join("");
+  $("#decision").innerHTML=`
+    <div class="verdict ${auto?"auto":"review"}">
+      <div class="h">${auto?"✅ Auto-routed":"👤 Sent to manual review"}
+        <span class="tag">${esc(rt.destination)}</span></div>
+      <div class="r">${esc(rt.reason)}</div>
+      ${rt.policy_overrides&&rt.policy_overrides.length?
+        `<div class="r" style="margin-top:6px;color:#f5cf7a">⚑ ${rt.policy_overrides.map(esc).join(" · ")}</div>`:""}
+    </div>
+    <div class="kv">
+      <div>category</div><div><span class="tag cat">${esc(c.category)}</span></div>
+      <div>urgency</div><div><span class="tag u-${esc(c.urgency)}">${esc(c.urgency)}</span>
+        <span style="color:var(--dim);font-size:12px"> · first response ${rt.sla_minutes} min</span></div>
+      <div>team</div><div><span class="tag">${esc(c.recommended_team)}</span></div>
+      <div>confidence</div><div><b>${c.confidence.toFixed(2)}</b>
+        <div class="meter"><i class="${confClass(c.confidence)}" style="width:${c.confidence*100}%"></i></div></div>
+      <div>summary</div><div>${esc(c.summary)}</div>
+      <div>model</div><div class="mono">${esc(r.provider)} · ${esc(r.model||"")} · ${r.attempts} call(s) · ${r.latency_ms}ms</div>
+    </div>
+    ${flags?`<label>Validation flags (${r.validation_flags.length})</label>${flags}`:
+      `<div class="note">✓ No validation flags — every field came back inside the schema.</div>`}`;
+}
+
+async function send(t,fault){
+  $("#send").disabled=true;
+  const st={};
+  const step=(k,cls,txt)=>{st[k]={cls,txt};renderStages(st);};
+  step("ingest","run","validating payload…"); $("#pipeHint").textContent="running";
+  await sleep(140);
+  let r;
+  try{ r=await BE.submit(t,fault); }
+  catch(e){ $("#pipeHint").textContent="request failed"; $("#send").disabled=false;
+            $("#json").textContent=String(e); return; }
+
+  step("ingest","ok",`payload valid · channel ${t.channel}`); await sleep(120);
+
+  if(r.status==="duplicate"){
+    step("dedupe","warn",`fingerprint already claimed by <code>${esc(r.duplicate_of||"")}</code> — dropped`);
+    ["classify","validate","route"].forEach(k=>step(k,"skip","skipped — no API call spent"));
+    step("persist","ok","duplicate recorded for the audit trail");
+  }else if(r.status==="failed"){
+    step("dedupe","ok","new fingerprint claimed");
+    step("classify","bad",esc(r.error||"upstream failure"));
+    ["validate","route"].forEach(k=>step(k,"skip","not reached"));
+    step("persist","warn","error logged · fingerprint released for redelivery");
+  }else{
+    step("dedupe","ok",`new fingerprint <code>${esc((r.fingerprint||"").slice(0,18))}…</code>`); await sleep(160);
+    const nflags=(r.validation_flags||[]).length;
+    step("classify",r.attempts>1?"warn":"ok",
+      r.attempts>1?`${r.attempts} calls — first response failed validation, repair pass succeeded`
+                  :`1 call · ${r.latency_ms}ms · ${esc(r.model||r.provider)}`); await sleep(160);
+    step("validate",nflags?"warn":"ok",
+      nflags?`${nflags} field(s) corrected before routing`:"all five fields inside the schema"); await sleep(160);
+    step("route",r.routing.action==="auto_route"?"ok":"warn",esc(r.routing.reason)); await sleep(120);
+    step("persist","ok","ticket, decision and flags written");
+  }
+  $("#pipeHint").textContent="done";
+  $("#json").textContent=JSON.stringify(r,null,2);
+  renderDecision(r);
+  await refresh();
+  $("#send").disabled=false;
+  return r;
+}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* ------------------------------------------------------------------ tables */
+let TAB="auto", STATE={tickets:[],errors:[]};
+
+function ticketRows(list,withActions){
+  if(!list.length) return `<div class="muted">Nothing here yet.</div>`;
+  return `<div class="tw"><table><thead><tr>
+    <th>Ticket</th><th>Subject</th><th>Category</th><th>Urgency</th><th>Conf.</th>
+    <th>${withActions?"Destination / action":"Destination"}</th></tr></thead><tbody>
+    ${list.map(t=>{
+      const c=t.classification||{},rt=t.routing||{};
+      const resolved=t.review_state&&t.review_state!=="pending";
+      return `<tr>
+        <td class="mono">${esc(t.ticket_id)}</td>
+        <td>${esc((t.subject||"").slice(0,58))}</td>
+        <td><span class="tag cat">${esc(c.category||"—")}</span></td>
+        <td><span class="tag u-${esc(c.urgency||"medium")}">${esc(c.urgency||"—")}</span></td>
+        <td class="mono">${c.confidence!=null?c.confidence.toFixed(2):"—"}</td>
+        <td>${withActions&&!resolved?
+            `<div class="row" style="gap:5px">
+               <select data-team="${esc(t.ticket_id)}" style="max-width:150px;padding:4px 6px;font-size:11.5px">
+                 ${TEAMS.map(x=>`<option ${x===c.recommended_team?"selected":""}>${x}</option>`).join("")}
+               </select>
+               <button data-approve="${esc(t.ticket_id)}" style="padding:4px 9px;font-size:11.5px">Approve</button>
+             </div>
+             <div style="color:var(--dim2);font-size:11.5px;margin-top:3px">${esc(rt.reason||"")}</div>`
+           : resolved
+             ? `<span class="tag">${esc(rt.destination||c.recommended_team||"")}</span>
+                <span style="color:var(--ok);font-size:11.5px"> ✓ ${esc(t.review_state)}</span>`
+             : `<span class="tag">${esc(rt.destination||"")}</span>`}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+function renderTab(){
+  const T=STATE.tickets;
+  const auto=T.filter(t=>t.routing&&t.routing.action==="auto_route");
+  const review=T.filter(t=>t.routing&&t.routing.action==="manual_review");
+  const dupes=T.filter(t=>t.status==="duplicate");
+  const failed=T.filter(t=>t.status==="failed");
+  const processed=T.filter(t=>t.status==="processed");
+  $("#nAuto").textContent=auto.length; $("#nReview").textContent=review.filter(t=>t.review_state==="pending").length;
+  $("#nDupes").textContent=dupes.length; $("#nErrors").textContent=STATE.errors.length;
+
+  const box=$("#tabs");
+  if(TAB==="auto")   box.innerHTML=ticketRows(auto,false);
+  if(TAB==="review") box.innerHTML=ticketRows(review,true);
+  if(TAB==="dupes")  box.innerHTML= dupes.length?`<div class="tw"><table><thead><tr>
+      <th>Copy</th><th>Subject</th><th>Blocked because</th></tr></thead><tbody>
+      ${dupes.map(d=>`<tr><td class="mono">${esc(d.ticket_id)}</td>
+        <td>${esc((d.subject||"").slice(0,64))}</td>
+        <td class="mono" style="color:var(--dim)">${esc(d.duplicate_of||d.reason||"")}</td></tr>`).join("")}
+      </tbody></table></div>`:`<div class="muted">No duplicates blocked yet — try “Resend as duplicate”.</div>`;
+  if(TAB==="errors") box.innerHTML= STATE.errors.length?`<div class="tw"><table><thead><tr>
+      <th>Time</th><th>Stage</th><th>Kind</th><th>Attempts</th><th>Message</th><th>Ticket</th>
+      </tr></thead><tbody>${STATE.errors.map(e=>`<tr>
+        <td class="mono">${esc((e.ts||"").slice(11,19))}</td><td><span class="tag">${esc(e.stage)}</span></td>
+        <td class="mono" style="color:#f5cf7a">${esc(e.kind)}</td><td class="mono">${e.attempts||0}</td>
+        <td style="max-width:520px">${esc((e.message||"").slice(0,220))}</td>
+        <td class="mono">${esc(e.ticket_id||"—")}</td></tr>`).join("")}</tbody></table></div>`
+      :`<div class="muted">Error log is empty. Pick a fault from “Simulate a bad model response”.</div>`;
+  if(TAB==="stats"){
+    const classified=auto.length+review.length;
+    const rate=classified?auto.length/classified:0;
+    const confs=processed.filter(t=>t.classification).map(t=>t.classification.confidence);
+    const avg=confs.length?confs.reduce((a,b)=>a+b,0)/confs.length:0;
+    const byCat={},byTeam={};
+    processed.forEach(t=>{const c=t.classification; if(!c)return;
+      byCat[c.category]=(byCat[c.category]||0)+1;
+      const d=(t.routing&&t.routing.destination!=="manual_review_queue")?t.routing.destination:c.recommended_team;
+      byTeam[d]=(byTeam[d]||0)+1;});
+    const stat=(n,l)=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    const bars=o=>{const m=Math.max(1,...Object.values(o));
+      return Object.entries(o).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+        `<div class="bar"><div class="mono">${esc(k)}</div><div class="t"><i style="width:${v/m*100}%"></i></div>
+         <div class="mono" style="text-align:right">${v}</div></div>`).join("");};
+    box.innerHTML=`<div class="stats">
+        ${stat(T.length,"deliveries received")}
+        ${stat(processed.length,"processed")}
+        ${stat(dupes.length,"duplicates blocked")}
+        ${stat(auto.length,"auto-routed")}
+        ${stat(review.length,"sent to review")}
+        ${stat(failed.length,"failed calls")}
+        ${stat((rate*100).toFixed(0)+"%","automation rate")}
+        ${stat(avg.toFixed(2),"mean confidence")}
+      </div>
+      <div class="bars"><label>By category</label>${bars(byCat)||'<div class="muted">—</div>'}
+      <label style="margin-top:12px">By destination team</label>${bars(byTeam)||'<div class="muted">—</div>'}</div>`;
+  }
+}
+async function refresh(){ STATE=await BE.state(); renderTab(); }
+
+/* ------------------------------------------------------------------ wiring */
+$("#tabbar").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-tab]"); if(!b)return;
+  TAB=b.dataset.tab;
+  document.querySelectorAll("#tabbar button").forEach(x=>x.classList.toggle("on",x===b));
+  renderTab();
+});
+$("#tabs").addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-approve]"); if(!b)return;
+  const id=b.dataset.approve;
+  const team=document.querySelector(`select[data-team="${id}"]`).value;
+  const orig=STATE.tickets.find(t=>t.ticket_id===id);
+  const decision=(orig&&orig.classification&&orig.classification.recommended_team===team)
+    ?"approved":"reassigned";
+  b.disabled=true; await BE.resolve(id,decision,team); await refresh();
+});
+
+function currentTicket(){
+  return {subject:$("#subject").value.trim()||"(no subject)",
+          body:$("#body").value.trim()||"(empty)",
+          requester_email:$("#email").value.trim(),
+          channel:$("#channel").value};
+}
+$("#send").addEventListener("click",()=>send(currentTicket(),$("#fault").value));
+$("#dupe").addEventListener("click",()=>send(currentTicket(),"none"));
+$("#runAll").addEventListener("click",async()=>{
+  $("#runAll").disabled=true;
+  for(const s of SAMPLES){
+    await BE.submit({subject:s.subject,body:s.body,requester_email:s.requester_email,channel:s.channel},null);
+  }
+  await refresh(); TAB="stats";
+  document.querySelectorAll("#tabbar button").forEach(x=>x.classList.toggle("on",x.dataset.tab==="stats"));
+  renderTab(); $("#runAll").disabled=false;
+  $("#pipeHint").textContent="12 samples processed — see Stats";
+});
+$("#reset").addEventListener("click",async()=>{
+  if(BE.reset) await BE.reset();
+  renderStages({}); renderDecision(null);
+  $("#json").textContent="// send a ticket to see the structured result";
+  $("#pipeHint").textContent="idle"; await refresh();
+});
+
+$("#samples").innerHTML=SAMPLES.map(s=>`<button data-s="${s.id}">${s.id}</button>`).join("");
+$("#samples").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-s]"); if(!b)return;
+  const s=SAMPLES.find(x=>x.id===b.dataset.s);
+  document.querySelectorAll("#samples button").forEach(x=>x.classList.toggle("on",x===b));
+  $("#subject").value=s.subject; $("#body").value=s.body;
+  $("#email").value=s.requester_email; $("#channel").value=s.channel;
+  $("#proves").innerHTML=`<b>${s.id}</b> — ${esc(s.proves)}`;
+});
+$("#fault").innerHTML=FAULTS.map(f=>`<option value="${f.id}">${f.label}</option>`).join("");
+
+/* mode detection: live API if this page is served by the FastAPI app */
+(async function init(){
+  const params=new URLSearchParams(location.search);
+  const override=params.get("api");
+  const base=override!==null?override:(location.protocol.startsWith("http")?location.origin:null);
+  if(base!==null){
+    try{
+      const h=await fetch(base+"/health",{cache:"no-store"});
+      if(h.ok){
+        const info=await h.json();
+        LiveBackend.base=base; BE=LiveBackend;
+        $("#modeChip").className="chip live";
+        $("#modeChip").innerHTML=`LIVE API · <b>${esc(info.provider)}</b> · ${esc(info.model)}`;
+        $("#footMode").innerHTML=`Connected to the FastAPI service at <span class="mono">${esc(base)}</span>
+          — every decision on this page came from the real pipeline.
+          Interactive API docs: <a href="${esc(base)}/docs">/docs</a>.`;
+      }
+    }catch(e){/* fall through to simulation */}
+  }
+  if(BE===SimBackend){
+    $("#modeChip").className="chip sim";
+    $("#modeChip").innerHTML=`SIMULATION · <b>in-browser</b>`;
+    $("#footMode").innerHTML=`No backend detected, so this page is running the identical policy logic
+      client-side — same taxonomy, same thresholds, same validation and routing rules, same fingerprinting.
+      Serve it from the FastAPI app (<span class="mono">uvicorn app.main:app</span>) and it switches to the
+      real service automatically; set <span class="mono">OPENAI_API_KEY</span> there and the classifier
+      becomes a real OpenAI call instead of the offline keyword model.`;
+  }
+  const s=SAMPLES[0];
+  $("#subject").value=s.subject; $("#body").value=s.body;
+  $("#email").value=s.requester_email;
+  $("#proves").innerHTML=`<b>${s.id}</b> — ${esc(s.proves)}`;
+  document.querySelector('#samples button[data-s="s1"]').classList.add("on");
+  await refresh();
+})();
+</script>
+</body>
+</html>
