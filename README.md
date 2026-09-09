@@ -1,17 +1,10 @@
 # Support Ticket Triage
 
-> **Demo not yet published.** GitHub Pages for this repo has not been enabled —
-> the publish step was blocked by a read-only API token, so the URL below is the
-> *intended* address and does not serve anything yet. Run `publish_github.py`
-> with a token carrying Contents and Pages write, or enable Pages manually
-> (Settings → Pages → source `main` / `/docs`), and it goes live.
->
-> Intended address: `https://fadhlyemen.github.io/ticket-triage-demo/`
+**▶ Live demo: <https://fadhlyemen.github.io/ticket-triage-demo/>**
 
-To try the demo right now, open `static/index.html` directly in a browser — it
-is self-contained and needs no signup, no server and no API key. Send a ticket,
-or use the fault injector to watch the pipeline handle a malformed model
-response.
+No signup, no server, no API key. Send a ticket, or use the fault injector to
+watch the pipeline handle a malformed model response. The same page runs against
+the real FastAPI service when served by it — see *Run it* below.
 
 Webhook-driven support-ticket classification: a FastAPI endpoint receives a
 ticket, sends it to the OpenAI API under a strict JSON schema, validates and
